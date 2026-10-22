@@ -8,6 +8,8 @@ export const empty=()=>({version:1,revision:0,products:[],clients:[],purchases:[
 export const incoming=(s,pid)=>s.purchases.filter(p=>p.productId===pid&&p.status==='ordered').reduce((a,p)=>a+p.qty,0);
 export const low=p=>p.basis>0&&p.stock<=p.basis*(1-p.threshold/100);
 export const debt=s=>s.sales.filter(x=>!x.returned).reduce((a,x)=>a+x.total-x.paid,0);
+export function addTask(s,f){assert(typeof f.due==='string'&&Number.isFinite(Date.parse(f.due)),'Укажите дату и время напоминания');const task={id:id(),title:required(f.title,'Напоминание'),due:new Date(f.due).toISOString(),done:false};(s.tasks??=[]).push(task);return task}
+export function completeTask(s,tid){const task=(s.tasks||[]).find(t=>t.id===tid);assert(task,'Напоминание не найдено');task.done=true}
 export function transact(state,fn){const s=structuredClone(state);fn(s);s.revision++;validate(s);return s}
 export function addProduct(s,f){
  const sku=required(f.sku,'Артикул');assert(!s.products.some(p=>p.sku.toLowerCase()===sku.toLowerCase()),'Такой артикул уже существует');
@@ -32,7 +34,8 @@ export function validate(s){
  for(const c of s.clients)assert(text(c.name)&&text(c.phone)&&text(c.notes)&&['Опт','Розница'].includes(c.kind),'Повреждён клиент');
  for(const x of s.purchases)assert(pids.has(x.productId)&&money(x.qty)&&x.qty>0&&money(x.cost)&&money(x.freight)&&text(x.supplier)&&date(x.date)&&date(x.eta)&&['ordered','received'].includes(x.status),'Повреждена поставка');
  for(const x of s.sales)assert(pids.has(x.productId)&&(!x.clientId||cids.has(x.clientId))&&text(x.name)&&text(x.sku)&&text(x.kind)&&text(x.channel)&&date(x.date)&&typeof x.returned==='boolean'&&[x.qty,x.price,x.total,x.paid,x.cost].every(money)&&x.qty>0&&x.total===x.qty*x.price&&x.paid<=x.total,'Повреждена продажа');
- for(const x of s.movements)assert(pids.has(x.productId)&&text(x.type)&&date(x.date)&&Number.isSafeInteger(x.qty),'Повреждена история склада');return s;
+ for(const x of s.movements)assert(pids.has(x.productId)&&text(x.type)&&date(x.date)&&Number.isSafeInteger(x.qty),'Повреждена история склада');
+ assert(s.tasks===undefined||Array.isArray(s.tasks)&&s.tasks.length<=10000,'Повреждены напоминания');for(const t of s.tasks||[]){assert(t&&typeof t.id==='string'&&!ids.has(t.id)&&text(t.title)&&t.title.trim()&&date(t.due)&&typeof t.done==='boolean','Повреждено напоминание');ids.add(t.id)}return s;
 }
 export function demo(){const s=empty();const rows=[['Комплект постельного белья «Лён»','EL-001','Постельное бельё','Евро · молочный',24,3400,4900,6200],['Комплект постельного белья «Сатин»','EL-002','Постельное бельё','2-спальный · шалфей',8,2800,4100,5400],['Плед вафельный','EL-003','Пледы','200 × 220 см · песочный',32,1100,1700,2400],['Подушка «Мягкий сон»','EL-004','Подушки','50 × 70 см',42,650,950,1400],['Одеяло всесезонное','EL-005','Одеяла','200 × 220 см',18,1900,2800,3900],['Халат махровый','EL-006','Халаты','L · молочный',12,1600,2300,3200],['Полотенце банное','EL-007','Полотенца','70 × 140 см · оливковый',60,450,650,950],['Пижама хлопковая','EL-008','Пижамы','M · пудровый',0,1200,1800,2500]];
  for(const [name,sku,category,variant,stock,cost,wholesale,retail]of rows)addProduct(s,{name,sku,category,variant,stock,cost,wholesale,retail});s.products[1].basis=20;s.products[7].basis=15;
