@@ -2,7 +2,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as M from './model.js';
 import {reminders,analytics} from './insights.js';
+import * as F from './finance.js';
 const product=s=>M.addProduct(s,{name:'Комплект',sku:'EL-1',category:'Постельное бельё',stock:100,cost:100,wholesale:150,retail:200});
+test('money ledger records split payments, refunds and supplier expenses exactly once',()=>{
+ const s=M.empty(),p=product(s),c=M.addClient(s,{name:'Клиент'});
+ const sale=M.sell(s,{productId:p.id,qty:1,price:200,paid:50,clientId:c.id,account:'cash'});
+ M.pay(s,sale.id,150,'bank');let f=F.financials(s);assert.equal(f.balances.cash,5000);assert.equal(f.balances.bank,15000);assert.equal(f.income,20000);
+ M.returnSale(s,sale.id);f=F.financials(s);assert.equal(f.balances.cash,0);assert.equal(f.balances.bank,0);assert.equal(f.expense,20000);
+ M.order(s,{productId:p.id,qty:2,cost:100,supplier:'Поставщик',eta:'2026-12-01',account:'bank'});M.receive(s,s.purchases[0].id,20,'cash');f=F.financials(s);assert.equal(f.balances.bank,-20000);assert.equal(f.balances.cash,-2000);assert.equal(f.expense,42000);M.validate(s);
+});
+test('reconciliation and transfers preserve flow totals; manual expenses survive backup',()=>{
+ let s=M.empty();F.reconcile(s,{account:'cash',amount:1000});F.reconcile(s,{account:'bank',amount:2000});
+ F.manualMoney(s,{type:'transfer',account:'cash',amount:300,note:'Внесение',date:'2026-10-23'});
+ F.manualMoney(s,{type:'expense',account:'bank',amount:100,category:'Аренда',note:'Аренда',date:'2026-10-23'});
+ let f=F.financials(s);assert.equal(f.balances.cash,70000);assert.equal(f.balances.bank,220000);assert.equal(f.income,0);assert.equal(f.expense,10000);
+ F.reconcile(s,{account:'cash',amount:500});f=F.financials(s);assert.equal(f.balances.cash,50000);assert.equal(f.expense,10000);
+ s=M.validate(JSON.parse(JSON.stringify(s)));assert.equal(F.financials(s,{from:'2026-10-24'}).expense,0);
+ const before=JSON.stringify(s);assert.throws(()=>M.transact(s,x=>F.manualMoney(x,{type:'expense',account:'bad',amount:20,date:'2026-10-23',note:'Ошибка'})));assert.equal(JSON.stringify(s),before);
+ s.finance.entries[0].amount=NaN;assert.throws(()=>M.validate(s));
+});
+test('legacy migration keeps unknown accounts and never duplicates cumulative paid',()=>{
+ const s=M.demo();delete s.finance;const paid=s.sales.reduce((a,x)=>a+x.paid,0);F.ensureFinance(s);const n=s.finance.entries.length;F.ensureFinance(s);assert.equal(s.finance.entries.length,n);assert.equal(F.financials(s).income,paid);assert.equal(F.financials(s).balances.bank,0);assert.equal(F.financials(s).legacy,true);
+ M.pay(s,s.sales[0].id,100,'bank');assert.equal(F.financials(s).income,paid+10000);assert.equal(F.financials(s).balances.bank,10000);M.validate(s);
+});
 test('sale, debt payment and return preserve stock and accounting',()=>{let s=M.empty();const p=product(s),c=M.addClient(s,{name:'Покупатель',kind:'Опт'});M.sell(s,{productId:p.id,qty:30,price:150,paid:1000,clientId:c.id,kind:'Опт'});assert.equal(p.stock,70);assert.equal(M.debt(s),350000);assert.equal(M.low(p),true);const sale=s.sales[0];assert.equal(sale.cost,300000);M.pay(s,sale.id,500);assert.equal(M.debt(s),300000);M.returnSale(s,sale.id);assert.equal(p.stock,100);assert.equal(sale.refunded,150000);assert.equal(M.debt(s),0);assert.throws(()=>M.returnSale(s,sale.id));M.validate(s)});
 test('receiving adds freight to weighted average and cannot duplicate',()=>{const s=M.empty(),p=product(s);M.order(s,{productId:p.id,qty:100,cost:200,supplier:'Поставщик',eta:'2026-12-01'});assert.equal(p.stock,100);assert.equal(M.incoming(s,p.id),100);M.receive(s,s.purchases[0].id,1000);assert.equal(p.stock,200);assert.equal(p.cost,15500);assert.equal(p.basis,200);assert.equal(M.incoming(s,p.id),0);assert.throws(()=>M.receive(s,s.purchases[0].id,0));M.validate(s)});
 test('failed transactions do not mutate original state',()=>{const s=M.empty(),p=product(s);const before=JSON.stringify(s);assert.throws(()=>M.transact(s,x=>M.sell(x,{productId:p.id,qty:101,price:200,paid:20200})));assert.equal(JSON.stringify(s),before);assert.throws(()=>M.sell(s,{productId:p.id,qty:1,price:200,paid:0}));assert.equal(p.stock,100);assert.throws(()=>M.addProduct(s,{name:'Дубль',sku:'el-1',category:'Подушки',stock:0,cost:1,wholesale:1,retail:1}))});
